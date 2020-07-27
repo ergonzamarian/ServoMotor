@@ -1,0 +1,417 @@
+C51 COMPILER V9.50a   PROJETO                                                              12/04/2018 20:03:24 PAGE 1   
+
+
+C51 COMPILER V9.50a, COMPILATION OF MODULE PROJETO
+OBJECT MODULE PLACED IN .\Projeto.obj
+COMPILER INVOKED BY: C:\Keil\C51\BIN\C51.EXE ..\Projeto.c BROWSE DEBUG OBJECTEXTEND TABS(2) OBJECT(.\Projeto.obj)
+
+line level    source
+
+   1          //https://exploreembedded.com/wiki/8051_Family_C_Library
+   2          //https://exploreembedded.com/wiki/8051_serial_communication
+   3          //http://www.electronicwings.com/8051/servo-motor-interfacing-with-8051
+   4          
+   5          
+   6          #include<reg52x2.h>
+   7          #include<stdio.h>
+   8          #include <intrins.h>
+   9          #define adc_databus P2 // porta para leitura dos dados convertidos
+  10          #define PWM_Period 0xB7FE // Define value to be loaded in timer for PWM period of 20 milli second 
+  11          
+  12          
+  13          //PINOS DE CONTROLE DO ADC 0808
+  14          sbit adc_A    = P1^0;
+  15          sbit adc_B    = P1^1;
+  16          
+  17          //SBIT ADC_C    = P3^2; SOMENTE 4 CANAIS ECONOMIZA 1 BIT
+  18          sbit adc_ALE  = P1^2; // escolha do canal
+  19          sbit adc_Start= P1^3; // inicio da conversão
+  20          sbit adc_EOC  = P1^4; // indica final da conversão 0 -->1
+  21          sbit adc_OE   = P1^5; // habilitar saidas do conversor
+  22          
+  23          //PINOS DE PORTA
+  24          sbit Servo_1 = P3^7;
+  25          sbit Servo_2 = P3^6;
+  26          sbit Servo_3 = P3^5;
+  27          sbit Servo_4 = P3^4;
+  28          
+  29          //VARIÁVEIS PARA CONTROLE DO PWM
+  30          unsigned int ON_Period, OFF_Period, DutyCycle;
+  31          unsigned char ch,he;
+  32          
+  33          float PWM_IN0,PWM_IN1,PWM_IN2,PWM_IN3, x;
+  34          int motor = 0;
+  35          void Delay(unsigned int);
+  36          
+  37          //FUNÇÕES DE DELAY
+  38          //PARA 1us
+  39          void delay_us(unsigned int us_count)
+  40          {
+  41   1          while(us_count!=0)
+  42   1          {
+  43   2              us_count--;
+  44   2          }
+  45   1      }
+  46          //FUNÇÕES QUE FARÃO A CONVERSÃO DO ADC
+  47          
+  48          void ADC_Init()
+  49          {
+  50   1          adc_Start=0;                //Initialize all the control lines to zero.
+  51   1          adc_ALE=0;
+  52   1          adc_OE=0;
+  53   1          adc_EOC=1;                  //Configure the EOC pin as INPUT
+  54   1          adc_databus=0xff;             //configure adc_databus as input
+  55   1      
+C51 COMPILER V9.50a   PROJETO                                                              12/04/2018 20:03:24 PAGE 2   
+
+  56   1      }
+  57          
+  58          unsigned char ADC_StartConversion(char channel)//É ENVIADO COMO CHAR PARA QUE POSSA REALIZAR A CONVERSÃO
+  59          {
+  60   1          unsigned char adc_result;
+  61   1          //SELECIONA O CANAL
+  62   1          adc_A=((channel>>0) & 0x01);     //desloca para direita 0 bits
+  63   1          adc_B=((channel>>1) & 0x01);     //desloca para direita 1 bits
+  64   1      
+  65   1      
+  66   1          adc_ALE=1;         // Latch the address by making the ALE high / Define o canal a ser convertido.
+  67   1          delay_us(500);
+  68   1          adc_Start=1;       //Start the conversion after latching the channel address / Inicie a conversão depo
+             -is de bloquear o endereço do canal
+  69   1          delay_us(250);
+  70   1      
+  71   1          adc_ALE=0;         //Pull ALE line to zero after starting the conversion.
+  72   1          delay_us(500);
+  73   1          adc_Start=0;       //Pull Start line to zero after starting the conversion.
+  74   1      
+  75   1          while(adc_EOC==0);   
+  76   1        //ESPERANDO ROTINA PARA CONVERSÃO
+  77   1        // Wait till the ADC conversion is completed,
+  78   1          // EOC will be pulled to HIGH by the hardware(ADC0809)
+  79   1          // once conversion is completed.
+  80   1      
+  81   1          adc_OE=1;         //Make the Output Enable high
+  82   1          //to bring the ADC data to port pins
+  83   1          delay_us(250);
+  84   1          adc_result=adc_databus;  //Read the ADC data from ADC bus
+  85   1          adc_OE=0;           //After reading the data, disable th ADC output line.
+  86   1      
+  87   1        
+  88   1      
+  89   1          return(adc_result) ;
+  90   1      
+  91   1      }
+  92          void UART_TxChar(char ch)
+  93          {
+  94   1          SBUF = ch;      // Load the data to be transmitted
+  95   1          while(TI==0);   // Wait till the data is trasmitted
+  96   1          TI = 0;         //Clear the Tx flag for next cycle.
+  97   1      }
+  98          
+  99          //Funções para geração do PWM
+ 100          void Timer_init()
+ 101          {
+ 102   1          TMOD = 0x21;    /* Timer0 mode1 */
+ 103   1          TH0 = (PWM_Period >> 8);/* 20ms timer value */
+ 104   1          TL0 = PWM_Period;
+ 105   1          TR0 = 1;    /* Start timer0 */
+ 106   1      }
+ 107          
+ 108          /* Timer0 interrupt service routine (ISR) */
+ 109          void Timer0_ISR() interrupt 1
+ 110          {
+ 111   1        switch (motor)
+ 112   1        {
+ 113   2          case 1:
+ 114   2            Servo_1 = !Servo_1;
+ 115   2            if(Servo_1)
+ 116   2            {
+C51 COMPILER V9.50a   PROJETO                                                              12/04/2018 20:03:24 PAGE 3   
+
+ 117   3              TH0 = (ON_Period >> 8);
+ 118   3              TL0 = ON_Period;
+ 119   3            }
+ 120   2            else
+ 121   2            {
+ 122   3              TH0 = (OFF_Period >> 8);
+ 123   3              TL0 = OFF_Period;
+ 124   3            }
+ 125   2          break;
+ 126   2          case 2:
+ 127   2            Servo_2 =!Servo_2;
+ 128   2            if(Servo_2)
+ 129   2            {
+ 130   3              TH0 = (ON_Period >> 8);
+ 131   3              TL0 = ON_Period;
+ 132   3            }
+ 133   2            else
+ 134   2            {
+ 135   3              TH0 = (OFF_Period >> 8);
+ 136   3              TL0 = OFF_Period;
+ 137   3            }
+ 138   2          break;
+ 139   2          case 3:
+ 140   2            Servo_3 =!Servo_3;
+ 141   2            if(Servo_3)
+ 142   2            {
+ 143   3              TH0 = (ON_Period >> 8);
+ 144   3              TL0 = ON_Period;
+ 145   3            }
+ 146   2            else
+ 147   2            {
+ 148   3              TH0 = (OFF_Period >> 8);
+ 149   3              TL0 = OFF_Period;
+ 150   3            }
+ 151   2          break;
+ 152   2          case 4:
+ 153   2            Servo_4 =!Servo_4;
+ 154   2            if(Servo_4)
+ 155   2            {
+ 156   3              TH0 = (ON_Period >> 8);
+ 157   3              TL0 = ON_Period;
+ 158   3            }
+ 159   2            else
+ 160   2            {
+ 161   3              TH0 = (OFF_Period >> 8);
+ 162   3              TL0 = OFF_Period;
+ 163   3            }
+ 164   2          break;
+ 165   2        }
+ 166   1         
+ 167   1      }
+ 168          
+ 169          /* Calculate ON & OFF period from duty cycle */
+ 170          void Set_DutyCycle_To(float duty_cycle)
+ 171          {
+ 172   1          float period = 65535 - PWM_Period;
+ 173   1          ON_Period = ((period/100.0) * duty_cycle);
+ 174   1          OFF_Period = (period - ON_Period);
+ 175   1          ON_Period = 65535 - ON_Period;
+ 176   1          OFF_Period = 65535 - OFF_Period;
+ 177   1      }
+ 178          
+C51 COMPILER V9.50a   PROJETO                                                              12/04/2018 20:03:24 PAGE 4   
+
+ 179          void Timer2_ISR() interrupt 5
+ 180          {
+ 181   1          P1_6=~P1_6;
+ 182   1      }
+ 183          void Delay(unsigned int ms)
+ 184          {
+ 185   1        //RECEBERÁ 5ms E MULTIPLICARÁ POR 100 FICANDO EM 0,5s
+ 186   1          unsigned long int us = ms*100; 
+ 187   1          while(us--)//ROTINA DELAY REFAZ DELAY, ESPERA 500 PELO VALOR LOGO ABAIXO 
+ 188   1          {
+ 189   2              _nop_();
+ 190   2          }
+ 191   1      }
+ 192          
+ 193          //******* PRINCIPAL *********//
+ 194          void main()
+ 195          {
+ 196   1          unsigned char IN0,IN1,IN2,IN3;
+ 197   1          char ch;
+ 198   1      
+ 199   1      
+ 200   1        //config adc
+ 201   1        adc_Start=0; //Initialize all the control lines to zero.
+ 202   1        adc_ALE=0;
+ 203   1        adc_OE=0;
+ 204   1        adc_EOC=1; //Configure the EOC pin as INPUT
+ 205   1        adc_databus=0xff; //configure adc_databus as input
+ 206   1      
+ 207   1        //config timer
+ 208   1        TMOD = 0x21; //Timer0(PWM) mode1 e Timer1(serial) in Mode2
+ 209   1      
+ 210   1        //config pwm
+ 211   1        TH0 = (PWM_Period >> 8); //20ms timer value
+ 212   1        TL0 = PWM_Period;
+ 213   1        TR0 = 1; //Start timer0
+ 214   1      
+ 215   1        //config serial
+ 216   1        SCON = 0x50; //Asynchronous mode, 8-bit data and 1-stop bit
+ 217   1        TH1 = 0xFD; //9600 baudrate
+ 218   1        TR1 = 1; //Turn ON the timer for Baud rate generation
+ 219   1      
+ 220   1        //configurando interrupcoes
+ 221   1        ES = 1; //interrupcao da serial
+ 222   1        EA  = 1; //Atendendo interrupcao
+ 223   1        EX0 = 1; //Habilitando externa 0
+ 224   1        EX1 = 1; //Habilitano externa 1
+ 225   1        ET0 = 1; //Enable timer0 interrupt
+ 226   1        IT1 = 1; // sensivel por borda
+ 227   1        IT0 = 1; // sensivel por borda
+ 228   1      
+ 229   1        //utilizando o timer 2
+ 230   1        T2MOD=0X00;
+ 231   1        T2CON=0X00;
+ 232   1        RCAP2L=0X00;
+ 233   1        RCAP2H=0X4D;
+ 234   1        TL2=0X00;
+ 235   1        TH2=0X9B;
+ 236   1        ET2=1;
+ 237   1        TR2 = 1;
+ 238   1        Delay(51);
+ 239   1          while(1)
+ 240   1          { 
+C51 COMPILER V9.50a   PROJETO                                                              12/04/2018 20:03:24 PAGE 5   
+
+ 241   2          //REALIZARÁ A CHAMADA DA FUNÇÃO DO PWM PARA DEFINIR NÍVEIS ALTOS E BAIXOS
+ 242   2              IN0 = ADC_StartConversion(0);
+ 243   2              motor = 1;
+ 244   2              PWM_IN0 = ((IN0*9.3)/255)+2.7;
+ 245   2              Set_DutyCycle_To(PWM_IN0);
+ 246   2              Delay(5);
+ 247   2      
+ 248   2              IN1 = ADC_StartConversion(1);
+ 249   2              motor = 2;
+ 250   2              PWM_IN1 = ((IN1*9.3)/255)+2.7;
+ 251   2              Set_DutyCycle_To(PWM_IN1);
+ 252   2              Delay(5);
+ 253   2      
+ 254   2              IN2 = ADC_StartConversion(2);
+ 255   2              motor = 3;
+ 256   2              PWM_IN2 = ((IN2*9.3)/255)+2.7;
+ 257   2              Set_DutyCycle_To(PWM_IN2);
+ 258   2              Delay(5);
+ 259   2      
+ 260   2              IN3 = ADC_StartConversion(3);
+ 261   2              motor = 4;
+ 262   2              PWM_IN3 = ((IN3*9.3)/255)+2.7;
+ 263   2              Set_DutyCycle_To(PWM_IN3);
+ 264   2              Delay(5);
+ 265   2          //CONFERE SE ENTROU DADO NA SERIAL
+ 266   2              if(RI==1)
+ 267   2              {
+ 268   3                  ch=SBUF;
+ 269   3                  RI=0;
+ 270   3      
+ 271   3                  if(ch == 'q')
+ 272   3                  {
+ 273   4              //ENQUANTO NÃO RECEBER O CARCATERE X SERÁ FEITO A RECEPÇÃO DOS DADOS PELA SERIAL
+ 274   4                      while(ch!='x')
+ 275   4                      { 
+ 276   5                //CONFERE SE ENTROU DADO NA SERIAL
+ 277   5                          if(RI==1)
+ 278   5                          {
+ 279   6                              ch=SBUF;
+ 280   6                              RI=0;
+ 281   6                              if(ch =='a')//ABAIXAR
+ 282   6                              {
+ 283   7                                  motor = 1;
+ 284   7                                  if(PWM_IN0>=2.7&&PWM_IN0<=12)
+ 285   7                    {
+ 286   8                                      PWM_IN0=PWM_IN0+0.5;
+ 287   8                      
+ 288   8                    }
+ 289   7                    Set_DutyCycle_To(PWM_IN0);
+ 290   7                              }
+ 291   6                              if(ch=='l')//LEVANTAR
+ 292   6                              {
+ 293   7                                  motor = 1;
+ 294   7                                  if(PWM_IN0>=2.7&&PWM_IN0<=12)
+ 295   7                    {
+ 296   8                                      PWM_IN0=PWM_IN0-0.5;
+ 297   8                      
+ 298   8                    }
+ 299   7                    Set_DutyCycle_To(PWM_IN0);
+ 300   7                              }
+ 301   6                          }
+ 302   5                          if(RI==1)
+C51 COMPILER V9.50a   PROJETO                                                              12/04/2018 20:03:24 PAGE 6   
+
+ 303   5                {
+ 304   6                              ch=SBUF;
+ 305   6                              RI=0;
+ 306   6                              if(ch=='d')//DIREITA
+ 307   6                  {
+ 308   7                                  motor = 2;
+ 309   7                                  if(PWM_IN1>=2.7&&PWM_IN1<=12)
+ 310   7                    {
+ 311   8                                      PWM_IN1=PWM_IN1+0.5;
+ 312   8                      
+ 313   8                    }
+ 314   7                    Set_DutyCycle_To(PWM_IN1);
+ 315   7                              }
+ 316   6                              if(ch=='e')//ESQUERDA
+ 317   6                  {
+ 318   7                                  motor = 2;
+ 319   7                                  if(PWM_IN1>=2.7&&PWM_IN1<=12)
+ 320   7                    {
+ 321   8                                      PWM_IN1=PWM_IN1-0.5;
+ 322   8                      
+ 323   8                    }
+ 324   7                    Set_DutyCycle_To(PWM_IN1);
+ 325   7                              }
+ 326   6                          }
+ 327   5                          if(RI==1)
+ 328   5                {
+ 329   6                              ch=SBUF;
+ 330   6                              RI=0;
+ 331   6                              if(ch=='f')//FRENTE
+ 332   6                  {
+ 333   7                                  motor = 3;
+ 334   7                                  if(PWM_IN2>=2.7&&PWM_IN2<=12)
+ 335   7                    {
+ 336   8                                      PWM_IN2=PWM_IN2+0.5;
+ 337   8                      
+ 338   8                    }
+ 339   7                    Set_DutyCycle_To(PWM_IN2);
+ 340   7                              }
+ 341   6                              if(ch=='t')//TRAS
+ 342   6                  {
+ 343   7                                  motor = 3;
+ 344   7                                  if(PWM_IN2>=2.7&&PWM_IN2<=12)
+ 345   7                    {
+ 346   8                                      PWM_IN2=PWM_IN2-0.5;
+ 347   8                      
+ 348   8                    }
+ 349   7                    Set_DutyCycle_To(PWM_IN2);
+ 350   7                              }
+ 351   6                          }
+ 352   5                          if(RI==1) 
+ 353   5                {
+ 354   6                              ch=SBUF;
+ 355   6                              RI=0;
+ 356   6                              if(ch=='p')//PEGAR
+ 357   6                  {
+ 358   7                                  motor = 4;
+ 359   7                                  if(PWM_IN3>=2.7&&PWM_IN3<=12)
+ 360   7                    {
+ 361   8                                      PWM_IN3=PWM_IN3+0.5;
+ 362   8                      
+ 363   8                    }
+ 364   7                    Set_DutyCycle_To(PWM_IN3);
+C51 COMPILER V9.50a   PROJETO                                                              12/04/2018 20:03:24 PAGE 7   
+
+ 365   7                              }
+ 366   6                              if(ch=='s')//SOLTAR
+ 367   6                  {
+ 368   7                                  motor = 4;
+ 369   7                                  if(PWM_IN3>=2.7&&PWM_IN3<=12)
+ 370   7                    {
+ 371   8                                      PWM_IN3=PWM_IN3-0.5;
+ 372   8                      
+ 373   8                    }
+ 374   7                    Set_DutyCycle_To(PWM_IN3);
+ 375   7                              }
+ 376   6                          }
+ 377   5                      }
+ 378   4                  }
+ 379   3              }
+ 380   2          }
+ 381   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1453    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     30      17
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
